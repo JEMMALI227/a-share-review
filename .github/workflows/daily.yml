@@ -1,0 +1,44 @@
+name: A股每日复盘
+
+on:
+  schedule:
+    # 19:00 北京时间 = 11:00 UTC，周一到周五
+    - cron: '0 11 * * 1-5'
+  workflow_dispatch:      # 允许在 GitHub 网页上手点「Run workflow」手动触发
+
+permissions:
+  contents: write         # 要往回提交 data/
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: 装依赖
+        run: pip install -r requirements.txt
+
+      - name: 取数并推送
+        env:
+          SCT_SENDKEY:        ${{ secrets.SCT_SENDKEY }}
+          FEISHU_APP_ID:      ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET:  ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_TABLE_TOKEN: ${{ secrets.FEISHU_TABLE_TOKEN }}
+        run: python scripts/cloud_run.py
+
+      - name: 把当天数据提交回仓库
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "数据无变化，跳过提交"
+          else
+            git commit -m "chore: 更新复盘数据 $(date -u +'%Y-%m-%d')"
+            git push
+          fi

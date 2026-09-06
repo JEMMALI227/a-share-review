@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>A股每日复盘</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#fff; --line:#e6e8eb;
+    --t1:#1a1d21; --t2:#5f6672; --t3:#9aa1ab;
+    --up:#d32f2f; --down:#10893e; --flat:#8a9099;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{
+    margin:0;padding:16px 14px 40px;background:var(--bg);color:var(--t1);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  .wrap{max-width:760px;margin:0 auto}
+  h1{font-size:19px;font-weight:600;margin:0 0 2px}
+  .sub{color:var(--t3);font-size:12px;margin-bottom:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+  .today{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px}
+  .today .date{font-size:13px;color:var(--t2)}
+  .today .score{font-size:38px;font-weight:600;line-height:1;font-variant-numeric:tabular-nums}
+  .today .rating{font-size:13px;color:var(--t2);text-align:right}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px 8px}
+  .cell .k{font-size:11px;color:var(--t3);margin-bottom:3px}
+  .cell .v{font-size:15px;font-weight:500;font-variant-numeric:tabular-nums}
+  .sec{font-size:13px;font-weight:600;color:var(--t2);margin:0 0 10px}
+  .bars{display:flex;align-items:flex-end;gap:5px;height:74px}
+  .bar{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:3px}
+  .bar i{display:block;width:100%;border-radius:3px 3px 0 0;min-height:3px}
+  .bar span{font-size:9px;color:var(--t3);white-space:nowrap}
+  .tw{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;white-space:nowrap}
+  th,td{padding:8px 10px;text-align:right;border-bottom:1px solid var(--line)}
+  th{color:var(--t3);font-weight:500;font-size:11.5px;position:sticky;top:0;background:var(--card)}
+  td:first-child,th:first-child{text-align:left}
+  tbody tr:last-child td{border-bottom:none}
+  .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--flat)}
+  .msg{padding:28px 16px;text-align:center;color:var(--t3);font-size:13px}
+  footer{text-align:center;color:var(--t3);font-size:11px;margin-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>A股每日复盘</h1>
+  <div class="sub" id="sub">加载中…</div>
+  <div id="app"></div>
+  <footer>数据来自东方财富公开行情接口 · 每日收盘后自动更新</footer>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const UP = 'up', DOWN = 'down', FLAT = 'flat';
+
+function sign(v){ return v > 0 ? UP : v < 0 ? DOWN : FLAT; }
+function fmt(v, d = 2, dash = '—'){
+  if (v === null || v === undefined || v === '') return dash;
+  const n = Number(v);
+  return isNaN(n) ? dash : n.toFixed(d);
+}
+function pct(v, d = 2){
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  return isNaN(n) ? '—' : (n > 0 ? '+' : '') + n.toFixed(d) + '%';
+}
+function date(s){
+  s = String(s || '');
+  return s.length === 8 ? `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6)}` : (s || '—');
+}
+// 评分越高越强：强=红，弱=绿，跟 A 股红涨绿跌的习惯保持一致
+function scoreColor(v){
+  if (v === null || v === undefined) return '#8a9099';
+  return v >= 60 ? '#d32f2f' : v >= 40 ? '#8a6d3b' : '#10893e';
+}
+
+function render(rows){
+  if (!Array.isArray(rows) || !rows.length){
+    $('#app').innerHTML = '<div class="card"><div class="msg">暂无数据</div></div>';
+    return;
+  }
+  const r = rows[rows.length - 1];
+
+  // 顶部：最新交易日
+  let html = `<div class="card">
+    <div class="today">
+      <div>
+        <div class="date">${date(r.trade_date)} 收盘</div>
+        <div class="score" style="color:${scoreColor(r.score)}">${fmt(r.score, 1)}</div>
+      </div>
+      <div class="rating">${r.rating || '—'}</div>
+    </div>
+    <div class="grid">
+      ${cell('两市成交', fmt(r.total_amount_yi, 0) + ' 亿')}
+      ${cell('涨停 : 跌停', `${r.zt_count ?? '—'} : ${r.dt_count ?? '—'}`)}
+      ${cell('炸板率', fmt(r.zb_ratio, 1) + '%')}
+      ${cell('最高连板', (r.max_lianban ?? '—') + ' 板')}
+      ${cell('上涨占比', fmt(r.up_ratio, 1) + '%')}
+      ${cell('主力资金', (r.main_fund_yi === null || r.main_fund_yi === undefined)
+          ? '—' : (r.main_fund_yi >= 0 ? '流入 ' : '流出 ') + Math.abs(r.main_fund_yi).toFixed(0) + ' 亿',
+          sign(r.main_fund_yi))}
+    </div>
+  </div>`;
+
+  // 评分走势
+  const recent = rows.slice(-14);
+  html += `<div class="card"><div class="sec">评分走势（近 ${recent.length} 个交易日）</div><div class="bars">`;
+  recent.forEach(x => {
+    const v = Number(x.score) || 0;
+    html += `<div class="bar" title="${date(x.trade_date)} · ${v}">
+      <i style="height:${Math.max(3, v * 0.62)}px;background:${scoreColor(v)}"></i>
+      <span>${String(x.trade_date).slice(4,6)}/${String(x.trade_date).slice(6)}</span>
+    </div>`;
+  });
+  html += `</div></div>`;
+
+  // 行业
+  if (r.top1 || r.bot1){
+    html += `<div class="card"><div class="sec">行业表现</div>
+      <div class="grid">
+        ${cell('领涨', (r.top1 || '—') + (r.top1_pct != null ? ' ' + pct(r.top1_pct) : ''), UP)}
+        ${cell('领跌', (r.bot1 || '—') + (r.bot1_pct != null ? ' ' + pct(r.bot1_pct) : ''), DOWN)}
+        ${cell('上涨行业占比', fmt(r.sector_up_ratio, 0) + '%')}
+      </div></div>`;
+  }
+
+  // 明细
+  html += `<div class="card"><div class="sec">历史明细</div><div class="tw"><table>
+    <thead><tr>
+      <th>日期</th><th>评分</th><th>评级</th><th>成交(亿)</th><th>涨停</th><th>跌停</th>
+      <th>连板</th><th>上涨占比</th><th>上证</th><th>创业板</th><th>主力(亿)</th><th>领涨</th>
+    </tr></thead><tbody>`;
+  rows.slice().reverse().forEach(x => {
+    html += `<tr>
+      <td>${date(x.trade_date)}</td>
+      <td style="color:${scoreColor(x.score)};font-weight:600">${fmt(x.score, 1)}</td>
+      <td class="flat">${x.rating || '—'}</td>
+      <td>${fmt(x.total_amount_yi, 0)}</td>
+      <td>${x.zt_count ?? '—'}</td>
+      <td>${x.dt_count ?? '—'}</td>
+      <td>${x.max_lianban ?? '—'}</td>
+      <td>${fmt(x.up_ratio, 1)}%</td>
+      <td class="${sign(x.sh_pct)}">${pct(x.sh_pct)}</td>
+      <td class="${sign(x.cyb_pct)}">${pct(x.cyb_pct)}</td>
+      <td class="${sign(x.main_fund_yi)}">${fmt(x.main_fund_yi, 0)}</td>
+      <td class="flat">${x.top1 || '—'}</td>
+    </tr>`;
+  });
+  html += `</tbody></table></div></div>`;
+
+  $('#app').innerHTML = html;
+  $('#sub').textContent = `共 ${rows.length} 个交易日 · 更新于 ${r.update_time || date(r.trade_date)}`;
+}
+
+function cell(k, v, cls){
+  return `<div class="cell"><div class="k">${k}</div><div class="v ${cls || ''}">${v}</div></div>`;
+}
+
+fetch('./data/history.json?t=' + Date.now())
+  .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+  .then(render)
+  .catch(e => {
+    $('#sub').textContent = '';
+    $('#app').innerHTML = `<div class="card"><div class="msg">
+      数据加载失败（${e.message}）<br>请确认 data/history.json 已提交到仓库</div></div>`;
+  });
+</script>
+</body>
+</html>
