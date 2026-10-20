@@ -24,8 +24,10 @@
   .today .score{font-size:38px;font-weight:600;line-height:1;font-variant-numeric:tabular-nums}
   .today .rating{font-size:13px;color:var(--t2);text-align:right}
   .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px 8px}
+  .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:12px 8px}
   .cell .k{font-size:11px;color:var(--t3);margin-bottom:3px}
   .cell .v{font-size:15px;font-weight:500;font-variant-numeric:tabular-nums}
+  .note{color:var(--t3);font-size:11px;margin-top:10px}
   .sec{font-size:13px;font-weight:600;color:var(--t2);margin:0 0 10px}
   .bars{display:flex;align-items:flex-end;gap:5px;height:74px}
   .bar{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:3px}
@@ -75,15 +77,48 @@ function scoreColor(v){
   return v >= 60 ? '#d32f2f' : v >= 40 ? '#8a6d3b' : '#10893e';
 }
 
-function render(rows){
+// 隔夜外围（美股为主），数据来自 data/global_market.json，由晨间 workflow 更新
+function renderGlobal(g){
+  const items = (g && g.items) || [];
+  if (!items.length) return '';
+  const us = items.filter(x => x.group === '美股');
+  const others = items.filter(x => x.group !== '美股');
+  const date = (us[0] && us[0].date) || '';
+
+  let h = `<div class="card"><div class="sec">隔夜外围 · 美股 ${date || '—'} 收盘</div>`;
+  if (us.length){
+    h += '<div class="grid2">';
+    us.forEach(x => {
+      h += `<div class="cell"><div class="k">${x.name}</div>
+        <div class="v ${sign(x.pct)}">${pct(x.pct)}</div></div>`;
+    });
+    h += '</div>';
+  }
+  if (others.length){
+    h += `<div class="tw" style="margin-top:12px"><table>
+      <thead><tr><th>市场</th><th>品种</th><th>最新价</th><th>涨跌幅</th><th>日期</th></tr></thead><tbody>`;
+    others.forEach(x => {
+      h += `<tr><td class="flat">${x.group}</td><td>${x.name}</td>
+        <td>${fmt(x.price, 2)}</td>
+        <td class="${sign(x.pct)}">${pct(x.pct)}</td>
+        <td class="flat">${x.date || '—'}</td></tr>`;
+    });
+    h += '</tbody></table></div>';
+  }
+  h += `<div class="note">外围数据更新于 ${g.update_time || '—'}（北京时间早上自动更新）</div></div>`;
+  return h;
+}
+
+function render(rows, g){
   if (!Array.isArray(rows) || !rows.length){
     $('#app').innerHTML = '<div class="card"><div class="msg">暂无数据</div></div>';
     return;
   }
   const r = rows[rows.length - 1];
 
-  // 顶部：最新交易日
-  let html = `<div class="card">
+  // 顶部：隔夜外围 → 最新交易日
+  let html = renderGlobal(g);
+  html += `<div class="card">
     <div class="today">
       <div>
         <div class="date">${date(r.trade_date)} 收盘</div>
@@ -157,9 +192,13 @@ function cell(k, v, cls){
   return `<div class="cell"><div class="k">${k}</div><div class="v ${cls || ''}">${v}</div></div>`;
 }
 
-fetch('./data/history.json?t=' + Date.now())
-  .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
-  .then(render)
+Promise.all([
+  fetch('./data/history.json?t=' + Date.now())
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))),
+  // 外围数据缺失/失败不影响主表展示
+  fetch('./data/global_market.json?t=' + Date.now())
+    .then(r => r.ok ? r.json() : null).catch(() => null)
+]).then(([rows, g]) => render(rows, g))
   .catch(e => {
     $('#sub').textContent = '';
     $('#app').innerHTML = `<div class="card"><div class="msg">

@@ -1,0 +1,48 @@
+name: 隔夜外围晨间更新
+
+on:
+  schedule:
+    # 北京时间 07:17（UTC 23:17）。美股在北京时间凌晨 04:00/05:00 收盘，
+    # 这个点拿到的就是昨夜刚收盘那根，正好赶在 A 股开盘前。
+    # 同样用非整点分钟（17 分）避开 GitHub Actions 整点扎堆排队。
+    # 周末/美股休市时脚本会自动跳过推送，只更新文件。
+    - cron: '17 23 * * *'
+  workflow_dispatch:      # 可以在 GitHub 网页上手点「Run workflow」手动触发
+
+permissions:
+  contents: write         # 要往回提交 data/global_market.json
+
+env:
+  TZ: Asia/Shanghai       # 不加这个，日志和 update_time 会是 UTC，比北京时间晚 8 小时
+
+jobs:
+  morning:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: 装依赖
+        run: pip install -r requirements.txt
+
+      - name: 抓隔夜外围并推送
+        env:
+          SCT_SENDKEY: ${{ secrets.SCT_SENDKEY }}
+          PUSH: '1'          # 改成 '0' 就只更新网页、不发微信
+        run: python scripts/us_morning.py
+
+      - name: 提交隔夜数据
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "数据无变化，跳过提交"
+          else
+            git commit -m "chore: 更新隔夜外围 $(date +'%Y-%m-%d %H:%M')"
+            git push
+          fi
