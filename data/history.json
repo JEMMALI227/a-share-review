@@ -3566,7 +3566,7 @@
  },
  {
   "trade_date": "20261021",
-  "update_time": "2026-10-22 00:00:01",
+  "update_time": "2026-10-22 02:13:11",
   "sh_pct": -0.6,
   "sz_pct": -0.82,
   "cyb_pct": -1.62,
@@ -3603,7 +3603,7 @@
   "main_fund_yi": null,
   "margin_rzjme": -21.29,
   "margin_rzrqye": 24803.47,
-  "score": 41.0,
+  "score": 41.2,
   "rating": "偏弱 · 防守为主",
   "top1": "传媒",
   "top1_pct": 1.58,
