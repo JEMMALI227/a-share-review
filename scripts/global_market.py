@@ -7,15 +7,18 @@
 JSON 渲染「全球股市表现」表。
 
 指数清单（对照参考图：中国资产 / 美股 / 亚太·欧洲 / 大宗商品）：
-- 中国资产：中证红利、沪深300、科创创业50*、港股通央企红利*、恒生指数、恒生科技
-- 美股：纳指100、标普500、道琼斯、万得美国科技七巨头指数*
-- 亚太·欧洲：日经225、韩国综合指数、富时100、德国DAX
-  （参考图中的"罗素2000"与"欧洲斯托克600"无稳定免费源：罗素2000 暂缺，
-  欧洲用富时100+德国DAX替代）
+- 中国资产：中证红利、沪深300、科创创业50*、港股通央企红利*、恒生指数、恒生科技、
+  恒生国企指数、港股通创新药、香港半导体*、台湾加权指数、
+  纳斯达克中国金龙指数、富时中国A50期货、离岸人民币汇率
+- 美股：纳指100、标普500、道琼斯、万得美国科技七巨头指数*、
+  费城半导体、罗素2000*、万得美国微盘指数*
+- 亚太·欧洲：日经225、韩国综合指数、富时100、德国DAX、法国CAC40、新加坡A50期货
+  （"欧洲斯托克600"无稳定免费源，欧洲用富时100+德国DAX+法国CAC40替代）
 - 大宗商品：布伦特原油期货、现货黄金（伦敦金）
 
-带 * 的是 ETF 代理：科创创业50→科创创业ETF(159781)、
-港股通央企红利→港股通央企红利ETF(513910)。
+带 * 的是 ETF / 近似指数代理：科创创业50→科创创业ETF(159781)、
+港股通央企红利→港股通央企红利ETF(513910)、香港半导体→恒生半导体产业指数(HSSII)、
+罗素2000→罗素2000ETF-iShares(IWM)、万得美国微盘→微型股ETF-iShares(IWC)。
 带 * 的万得美国科技七巨头指数为**自建**：Wind 无免费公开接口，故按其公开成分
 （苹果、微软、英伟达、谷歌、亚马逊、Meta、特斯拉）以总市值加权合成，
 口径经历史数据回测与官方公布值吻合（误差 <0.05pct）；点位以首次运行日
@@ -27,13 +30,17 @@ JSON 渲染「全球股市表现」表。
   显示的是最近一个完整美股交易日。
 - 亚太·欧洲（新浪 int_/znb_）：新浪缓存的最近收盘价与涨跌幅。
 - 布油/黄金（新浪 hf_）：当前电子盘价 vs 昨结算价，近24小时连续交易。
+- 东财（push2 ulist.np）：无免费公开接口的境外指数/期货/美股ETF，一次批量请求拿全，
+  涨跌幅直接取东财 f3 字段，行情日期由 f124 时间戳换算。
+  注意：push2 的 stock/get 单只接口在本机常被限流，务必用 ulist.np 批量。
+- 离岸人民币（新浪 fx_）：USD/CNH 报价，涨跌为汇率自身变动方向。
 """
 import json
 import os
 import re
 import sys
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -44,6 +51,8 @@ UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
       "Referer": "https://gu.qq.com/"}
 SINA_UA = {"User-Agent": UA["User-Agent"],
            "Referer": "https://finance.sina.com.cn/"}
+EM_UA = {"User-Agent": UA["User-Agent"],
+         "Referer": "https://quote.eastmoney.com/"}
 
 
 # ------------------------------------------------------------------ 底层请求
@@ -150,12 +159,12 @@ def _sina(codes):
 
 
 def _sina_int(data):
-    """int_ 格式: 名称,最新价,涨跌,涨跌幅%"""
+    """int_ 格式: 名称,最新价,涨跌,涨跌幅%（备用：亚太欧洲已改用东财，新浪该源偶发陈旧）"""
     return {"name": data[0], "price": float(data[1]), "pct": float(data[3])}
 
 
 def _sina_znb(data):
-    """znb_ 格式: 名称,最新价,涨跌,涨跌幅%,时间,?,日期,时间,开,昨收,高,低,..."""
+    """znb_ 格式: 名称,最新价,涨跌,涨跌幅%,时间,?,日期,时间,开,昨收,高,低,...（备用）"""
     return {"name": data[0], "price": float(data[1]), "pct": float(data[3]),
             "date": data[6]}
 
@@ -170,6 +179,45 @@ def _sina_hf(data):
             "date": data[12] if len(data) > 12 else ""}
 
 
+def _sina_fx(data):
+    """fx_ 外汇格式: 时间,买,卖,... ,最新价,高,低,?,名称,涨跌幅%,涨跌额,振幅,...,日期"""
+    return {"name": data[9], "price": float(data[8]), "pct": float(data[10]),
+            "date": data[17] if len(data) > 17 else ""}
+
+
+# ------------------------------------------------------------ 东方财富批量行情
+def _em_ulist(secids):
+    """
+    东财 push2 批量行情，返回 {secid: {name, price, pct, date}}。
+    secid 形如 "100.TWII"（市场号.代码）。
+    只用 ulist.np 批量接口——单只的 stock/get 在本机常被限流。
+    """
+    url = ("https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids="
+           + ",".join(secids) + "&fields=f12,f13,f14,f2,f3,f4,f18,f124")
+    d = json.loads(_http(url, EM_UA).decode("utf-8", "replace"))
+    out = {}
+    for it in (d.get("data") or {}).get("diff") or []:
+        if not it.get("f12"):
+            continue
+        ts = it.get("f124") or 0
+        try:
+            if not ts:
+                date = ""
+            else:
+                # 美股收盘时间戳是美东16:00，换算到北京是次日凌晨 04:00/05:00，
+                # 直接取日期会显示成「明天」，故凌晨的行情归属前一自然日。
+                dt = datetime.fromtimestamp(int(ts))
+                if dt.hour < 6:
+                    dt -= timedelta(days=1)
+                date = dt.strftime("%Y-%m-%d")
+        except Exception:
+            date = ""
+        out[f"{it.get('f13')}.{it.get('f12')}"] = {
+            "name": it.get("f14") or "", "price": it.get("f2"),
+            "pct": it.get("f3"), "date": date}
+    return out
+
+
 # ------------------------------------------------------------------ 指数清单
 # kind: tencent_kline / sina_int / sina_znb / sina_hf
 ITEMS = [
@@ -180,25 +228,42 @@ ITEMS = [
     {"group": "中国资产", "name": "港股通央企红利*", "kind": "tencent_kline", "code": "sh513910"},
     {"group": "中国资产", "name": "恒生指数",       "kind": "tencent_kline", "code": "hkHSI", "ep": "hkfqkline"},
     {"group": "中国资产", "name": "恒生科技",       "kind": "tencent_kline", "code": "hkHSTECH", "ep": "hkfqkline"},
+    {"group": "中国资产", "name": "恒生国企指数",   "kind": "tencent_kline", "code": "hkHSCEI", "ep": "hkfqkline"},
+    {"group": "中国资产", "name": "港股通创新药",   "kind": "em", "code": "2.931787"},
+    {"group": "中国资产", "name": "香港半导体*",    "kind": "em", "code": "124.HSSII"},
+    {"group": "中国资产", "name": "台湾加权指数",   "kind": "em", "code": "100.TWII"},
+    {"group": "中国资产", "name": "纳斯达克中国金龙指数", "kind": "em", "code": "251.HXC"},
+    {"group": "中国资产", "name": "富时中国A50期货", "kind": "sina_hf", "code": "hf_CHA50CFD"},
+    {"group": "中国资产", "name": "离岸人民币汇率", "kind": "sina_fx", "code": "fx_susdcnh"},
     # ---- 美股
     {"group": "美股", "name": "纳指100",   "kind": "tencent_kline", "code": "usNDX", "ep": "usfqkline"},
     {"group": "美股", "name": "标普500",   "kind": "tencent_kline", "code": "usINX", "ep": "usfqkline"},
     {"group": "美股", "name": "道琼斯",    "kind": "tencent_kline", "code": "usDJI", "ep": "usfqkline"},
     {"group": "美股", "name": MAG7_NAME,   "kind": "mag7"},
-    # ---- 亚太·欧洲
-    {"group": "亚太·欧洲", "name": "日经225",       "kind": "sina_int", "code": "int_nikkei"},
-    {"group": "亚太·欧洲", "name": "韩国综合指数",  "kind": "sina_znb", "code": "znb_KOSPI"},
-    {"group": "亚太·欧洲", "name": "富时100",       "kind": "sina_int", "code": "int_ftse"},
-    {"group": "亚太·欧洲", "name": "德国DAX",       "kind": "sina_znb", "code": "znb_DAX"},
+    {"group": "美股", "name": "费城半导体", "kind": "em", "code": "251.SOX"},
+    {"group": "美股", "name": "罗素2000*", "kind": "em", "code": "107.IWM"},
+    {"group": "美股", "name": "万得美国微盘指数*", "kind": "em", "code": "107.IWC"},
+    # ---- 亚太·欧洲（原新浪 int_/znb_ 源偶发陈旧：实测日经/富时100 点位与涨跌幅
+    #      均明显滞后，故整组改用东财，保证与其它市场口径一致）
+    {"group": "亚太·欧洲", "name": "日经225",       "kind": "em", "code": "100.N225"},
+    {"group": "亚太·欧洲", "name": "韩国综合指数",  "kind": "em", "code": "100.KS11"},
+    {"group": "亚太·欧洲", "name": "富时100",       "kind": "em", "code": "100.FTSE"},
+    {"group": "亚太·欧洲", "name": "德国DAX",       "kind": "em", "code": "100.GDAXI"},
+    {"group": "亚太·欧洲", "name": "法国CAC40",     "kind": "em", "code": "100.FCHI"},
+    {"group": "亚太·欧洲", "name": "新加坡A50期货", "kind": "em", "code": "104.CN00Y"},
     # ---- 大宗商品
     {"group": "大宗商品", "name": "布伦特原油期货", "kind": "sina_hf", "code": "hf_OIL"},
     {"group": "大宗商品", "name": "现货黄金(伦敦金)", "kind": "sina_hf", "code": "hf_XAU"},
 ]
 
-NOTE = ("注：带*为ETF代理或自建指数（科创创业50→159781、港股通央企红利→513910；"
-        "万得美国科技七巨头指数为其公开成分股苹果/微软/英伟达/谷歌/亚马逊/Meta/"
-        "特斯拉按总市值加权合成，点位以首次运行日为1000，非Wind官方点位）。"
-        "罗素2000、欧洲斯托克600无稳定免费源暂缺，欧洲以富时100+德国DAX替代。"
+NOTE = ("注：带*为ETF代理、近似替代或自建指数（科创创业50→159781、港股通央企红利→513910、"
+        "香港半导体→恒生半导体产业指数HSSII、罗素2000→罗素2000ETF-iShares(IWM)、"
+        "万得美国微盘→微型股ETF-iShares(IWC)；万得美国科技七巨头指数为其公开成分股"
+        "苹果/微软/英伟达/谷歌/亚马逊/Meta/特斯拉按总市值加权合成，点位以首次运行日为1000，"
+        "非Wind官方点位）。"
+        "离岸人民币为USD/CNH报价，数值上涨=美元走强/人民币贬值。"
+        "富时中国A50期货(新浪)与新加坡A50期货(东财A50期指当月连续)标的相同、来源不同，数值可能略有差异。"
+        "欧洲斯托克600无稳定免费源，欧洲以富时100+德国DAX+法国CAC40替代。"
         "美股为最近一个已收盘交易日（北京时间凌晨收盘）；布油/黄金为电子盘现价vs昨结算。")
 
 
@@ -215,6 +280,14 @@ def fetch(groups=None):
         sina_data = _sina(",".join(sina_codes))
     except Exception as e:
         print(f"  [warn] 新浪批量行情失败: {e}")
+    # 东财的源同样一次批量请求（单只 stock/get 在本机常被限流）
+    em_ids = [it["code"] for it in items if it["kind"] == "em"]
+    em_data = {}
+    if em_ids:
+        try:
+            em_data = _em_ulist(em_ids)
+        except Exception as e:
+            print(f"  [warn] 东财批量行情失败: {e}")
 
     rows = []
     for it in items:
@@ -245,6 +318,18 @@ def fetch(groups=None):
                 rows.append({"group": it["group"], "name": it["name"],
                              "price": v["price"], "pct": round(v["pct"], 2),
                              "date": v.get("date", ""), "src": "新浪"})
+            elif kind == "sina_fx":
+                v = _sina_fx(sina_data.get(it["code"], []))
+                rows.append({"group": it["group"], "name": it["name"],
+                             "price": v["price"], "pct": round(v["pct"], 2),
+                             "date": v.get("date", ""), "src": "新浪"})
+            elif kind == "em":
+                v = em_data.get(it["code"])
+                if not v or v.get("pct") in (None, "-"):
+                    raise ValueError(f"东财未返回 {it['code']}")
+                rows.append({"group": it["group"], "name": it["name"],
+                             "price": v["price"], "pct": round(float(v["pct"]), 2),
+                             "date": v.get("date", ""), "src": "东财"})
         except Exception as e:
             print(f"  [warn] {it['name']}({it['code']}) 取数失败: {e}")
 
