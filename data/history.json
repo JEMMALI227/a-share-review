@@ -4031,7 +4031,7 @@
  },
  {
   "trade_date": "20261027",
-  "update_time": "2026-10-28 00:43:37",
+  "update_time": "2026-10-28 02:52:46",
   "sh_pct": -1.33,
   "sz_pct": -2.5,
   "cyb_pct": -3.41,
@@ -4068,7 +4068,7 @@
   "main_fund_yi": null,
   "margin_rzjme": -55.94,
   "margin_rzrqye": 24261.79,
-  "score": 23.3,
+  "score": 23.6,
   "rating": "极弱 · 空仓观望",
   "top1": "电机Ⅱ",
   "top1_pct": 1.38,
